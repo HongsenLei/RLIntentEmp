@@ -1,3 +1,5 @@
 # Byte-compiled / optimized / DLL files
 **/__pycache__/
 process_data/
+ppo/ppo_reward.py
+reward_model_data_tj.py

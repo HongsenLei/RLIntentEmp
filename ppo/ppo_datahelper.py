@@ -112,7 +112,7 @@ class CONVOnlyPromptDataset(IterDataset):
         logging.info(f'=============Loaded total {len(self.data)} samples from {files}.=============')
 
         # debug
-        # self.data=self.data[:64]
+        # self.data=self.data[:256]
 
         self.size = len(self.data)
 

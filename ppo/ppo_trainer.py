@@ -329,7 +329,12 @@ class PPOTrainer():
         return reward
 
     @torch.no_grad()
-    def get_generative_reward(self, sampled_text:List[str], conversation_history:List[List[Dict]], situation:List[str], emotion:List[str])->List[float]:
+    def get_generative_reward(self, sampled_vec:List[List[int]], sampled_text:List[str], conversation_history:List[List[Dict]], situation:List[str], emotion:List[str])->List[float]:
+        falied_sample_idx = []
+        for sv_idx in range(len(sampled_vec)):
+            if sampled_vec[sv_idx][-1] != self.tokenizer.eos_token_id:
+                falied_sample_idx.append(sv_idx)
+        
         input_ids_list = []
         bsz = len(sampled_text)
         rewards = [0]*bsz
@@ -379,16 +384,22 @@ class PPOTrainer():
             torch.cuda.empty_cache()
 
         rewards = [rw / reward_gen_times for rw in rewards]
+        for idx in falied_sample_idx:
+            rewards[idx] = 0.0 # TODO 之后调整参数需要写到opt里
         del batch_input_ids, batch_attention_mask
         torch.cuda.empty_cache()
         return rewards
     
     # TODO 之后要加入situation和emotion
     @torch.no_grad()
-    def get_discriminative_reward(self, sampled_vec:List[int])->List[float]:
+    def get_discriminative_reward(self, sampled_vec:List[List[int]])->List[float]:
         """
         先对sampled_vec 右pad，再过AutoModelForSequenceClassification 
         """
+        falied_sample_idx = []
+        for sv_idx in range(len(sampled_vec)):
+            if sampled_vec[sv_idx][-1] != self.tokenizer.eos_token_id:
+                falied_sample_idx.append(sv_idx)
         sampled_vec = torch.tensor(pad_sequences(sampled_vec, pad_value=self.tokenizer.pad_token_id), dtype=torch.long, device=self.accelerator.device)
         attention_mask, position_ids = prepare_forward(sampled_vec,self.tokenizer.pad_token_id)
         output = self.discriminative_reward_model(
@@ -401,9 +412,12 @@ class PPOTrainer():
                 output_hidden_states=False,
             )
         logits: torch.tensor = output.logits
-        print(logits)
-        print(logits.shape)
-        # rewards = logits.seqeunce
+        rewards = logits.squeeze(-1).cpu().tolist()
+        for idx in falied_sample_idx:
+            rewards[idx] = -1.0 # TODO 之后调整参数需要写到opt里
+        del sampled_vec, attention_mask, position_ids, output
+        torch.cuda.empty_cache()
+        return rewards
 
     def get_context_and_response(self, context: List[List[int]], responses: List[List[int]]):
         # responses 官方generate输出包含问题和答案
@@ -484,7 +498,7 @@ class PPOTrainer():
             if self.data_mode=="rm":
                 rewards = self.get_rule_reward(batch['response'], sampled_text, batch["label"])
             elif self.data_mode=="conv":
-                rewards = self.get_generative_reward(sampled_text, batch['text'], batch['situation'], batch['emotion'])
+                rewards = self.get_generative_reward(sampled_vec, sampled_text, batch['text'], batch['situation'], batch['emotion'])
             elif self.data_mode == "origin":
                 rewards = self.get_discriminative_reward(sampled_vec) # 此时sample_vec没有pad
 
@@ -548,11 +562,15 @@ class PPOTrainer():
             for i in range(bsz):
                 resp_length = len(resp_vec_sampled[i])
                 penalized_rewards = kl_penalty[i].clone()
-                # 奖励应该给到<Intent end>
-                if sampled_vec[i][-1]==self.tokenizer.eos_token_id:
-                    penalized_rewards[-2] += rewards[i]
-                else:
-                    penalized_rewards[-1] += rewards[i]
+                # # 奖励应该给到<|Intent end|> 
+                # if sampled_vec[i][-1]==self.tokenizer.eos_token_id:
+                #     penalized_rewards[-2] += rewards[i]
+                # else:
+                #     penalized_rewards[-1] += rewards[i]
+
+                # 奖励给到最后一个token，大概率是<|eos_id|>
+                penalized_rewards[-1] += rewards[i]
+
                 self.train_metrics.record_metric('ref_kl', (logprobs[i][-resp_length:] - ref_logprobs[i][-resp_length:]).mean().item())
                 
                 sample = {
@@ -769,7 +787,7 @@ class PPOTrainer():
             if self.data_mode == "rm":
                 rewards = self.get_rule_reward(batch['response'], output_text, batch["label"])
             elif self.data_mode == "conv":
-                rewards= self.get_generative_reward(output_text, batch['text'],batch['situation'],batch['emotion'])
+                rewards= self.get_generative_reward(output_vec, output_text, batch['text'],batch['situation'],batch['emotion'])
             elif self.data_mode == "origin":
                 rewards = self.get_discriminative_reward(output_vec)
 

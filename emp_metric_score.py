@@ -307,10 +307,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="compute all ckpt score and paint")
     parser.add_argument('--data_mode', type=str,required=True)
     parser.add_argument('--exp_model_path', type=str, required=True)
-    parser.add_argument('--bert_path', type=str, default="/seu_share/home/wutianxing/220222120/hf_model/roberta-large")
+    parser.add_argument('--bert_path', type=str, default="/root/autodl-tmp/model/roberta-large")
     # 解析命令行参数
     args = parser.parse_args()
     main(args)
 
-# python emp_metric_score.py --data_mode "conv" --exp_model_path "/seu_share/home/wutianxing/220222120/experients/sft_conv_lr_1e-5_bz_48" 
+# python emp_metric_score.py --data_mode "conv" --exp_model_path "/root/autodl-tmp/experients/ppo_origin_lr_5e-6_vm" 
 # python emp_metric_score.py --data_mode "rm" --exp_model_path "/seu_share/home/wutianxing/220222120/experients/sft_rm_lr_5e-6_bz_128"

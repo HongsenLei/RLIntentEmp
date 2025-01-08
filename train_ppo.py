@@ -6,21 +6,21 @@ import torch.nn as nn
 from config_ppo import parse_args
 from ppo.ppo_trainer import PPOTrainer
 from ppo.ppo_datahelper import get_tokenizer
-from src.utils import setup_accelerator,synchronize_if_distributed,print_rank_0
+from src.utils import setup_accelerator,synchronize_if_distributed,print_rank_0,prepare_forward
 from accelerate.state import AcceleratorState
 from transformers.models.llama.modeling_llama import LlamaForCausalLM, LlamaForSequenceClassification
 from transformers import AutoModelForCausalLM
 import os
 
 
-# import debugpy
-# try:
-#     # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
-#     debugpy.listen(("localhost", 9502))
-#     print("Waiting for debugger attach")
-#     debugpy.wait_for_client()
-# except Exception as e:
-#     pass
+import debugpy
+try:
+    # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
+    debugpy.listen(("localhost", 9502))
+    print("Waiting for debugger attach")
+    debugpy.wait_for_client()
+except Exception as e:
+    pass
 
 # class LlamaValueModel(LlamaForCausalLM):
 #     def __init__(self, config, opt, tokenizer):
@@ -53,10 +53,11 @@ class LlamaValueModel(LlamaForSequenceClassification):
         # self.score = nn.Linear(config.hidden_size, 1, bias=False)
         
     def forward(self, decoder_input, only_last=True):
-        attention_mask = decoder_input.ne(self.tokenizer.pad_token_id)
+        attention_mask, position_ids = prepare_forward(decoder_input,self.tokenizer.pad_token_id)
         output = self.model.forward(
             input_ids=decoder_input,
             attention_mask=attention_mask, 
+            position_ids=position_ids,
             return_dict=True,
             use_cache=False
             )

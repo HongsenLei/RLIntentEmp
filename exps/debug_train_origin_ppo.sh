@@ -1,21 +1,20 @@
 #!/bin/bash
-# Copyright (c) Fudan NLP Group.
-# SPDX-License-Identifier: Apache-2.0
-export TOKENIZERS_PARALLELISM=fasle 
-export CUDA_VISIBLE_DEVICES=0,1
 
-model_root=/root/autodl-tmp/model
+export TOKENIZERS_PARALLELISM=fasle 
+export CUDA_VISIBLE_DEVICES=0
+
+model_root=/mnt/d/MasterDegree/experients
 policy_model=${model_root}/conv_sft_600
-reward_model=${model_root}/rm_sft_900
+reward_model=${model_root}/vm_298
 critic_model=${model_root}/vm_298
 base_model=Llama-3.2-1B-Instruct
 
 # train arg
 lr=5e-6
 
-data_mode=conv
-data_path=/root/autodl-tmp/data/conv_ppo
-exp_root=/root/autodl-tmp/experients
+data_mode=origin
+data_path=/mnt/d/MasterDegree/data/conv_ppo
+exp_root=/mnt/d/MasterDegree/experients
 exp_name=debug_ppo_${data_mode}
 exp_dir=${exp_root}/${exp_name}
 
@@ -66,6 +65,5 @@ train_ppo.py \
     --rollout_batch_size 2 \
     --num_rollouts 4 \
     --gradient_checkpoint \
-    --reward_num_return_sequences 1 \
     --logdir ${exp_dir}/tensorboard_log \
 # &> ${exp_dir}/${exp_name}.log

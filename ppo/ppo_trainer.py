@@ -12,7 +12,7 @@ from metric import MeanMetric, PPLMetric, SumMetric, RealtimeMetric
 import deepspeed
 from deepspeed.ops.adam import DeepSpeedCPUAdam
 from metric import Metrics
-from transformers import GenerationConfig, AutoModelForCausalLM
+from transformers import GenerationConfig, AutoModelForCausalLM, AutoModelForSequenceClassification
 import re
 import math
 
@@ -65,8 +65,8 @@ class PPOTrainer():
         self.print_interval = opt.num_rollouts // opt.batch_size
         assert self.print_interval>0
 
-        self.data_mode: Literal['rm','conv'] = opt.data_mode
-        self.DATA_CLASS = RMOnlyPromptDataset if self.data_mode == 'rm' else CONVOnlyPromptDataset
+        self.data_mode: Literal['rm', 'conv', 'origin'] = opt.data_mode
+        self.DATA_CLASS = RMOnlyPromptDataset if self.data_mode == 'rm' else CONVOnlyPromptDataset # origin（常规RM） 和 conv（生成RM） 都是CONVOnlyPromptDataset
         self.num_rollouts: int = opt.num_rollouts
         self.reward_clip: float = opt.reward_clip
         self.pg_clip: float = opt.pg_clip
@@ -104,21 +104,7 @@ class PPOTrainer():
             )
         
         self.accelerator = accelerator
-        if self.data_mode == 'conv':
-            self.generative_reward_model = AutoModelForCausalLM.from_pretrained(opt.reward_model_path).to(self.accelerator.device)
-            self.generative_reward_model.eval()
-            self.reward_cot_generation_config = GenerationConfig(
-                max_new_tokens=self.opt.maxlen_res,
-                do_sample=True,
-                temperature=self.opt.reward_temperature,
-                top_k=self.opt.reward_top_k,
-                num_return_sequences=self.opt.min_reward_num_return_sequences,
-                output_scores=True,
-                return_dict_in_generate=True,
-                return_legacy_cache=True,
-            )
-            self.answer_trigger_token_ids = self.tokenizer.encode(ANSWER_TRIGGER, add_special_tokens=False)
-            self.YES_SCORE_IDX = self.tokenizer.encode("Yes", add_special_tokens=False)[0]
+        
         self.optimizer = self.build_optimizer()
         self.scheduler = optim.lr_scheduler.LambdaLR(
                                 optimizer=self.optimizer, 
@@ -163,6 +149,26 @@ class PPOTrainer():
 
         # get untrainable model
         eval_ds_config = get_eval_ds_config(offload=True)
+        if self.data_mode == 'conv':
+            self.generative_reward_model = AutoModelForCausalLM.from_pretrained(opt.reward_model_path).to(self.accelerator.device)
+            self.generative_reward_model.eval()
+            self.reward_cot_generation_config = GenerationConfig(
+                max_new_tokens=self.opt.maxlen_res,
+                do_sample=True,
+                temperature=self.opt.reward_temperature,
+                top_k=self.opt.reward_top_k,
+                num_return_sequences=self.opt.min_reward_num_return_sequences,
+                output_scores=True,
+                return_dict_in_generate=True,
+                return_legacy_cache=True,
+            )
+            self.answer_trigger_token_ids = self.tokenizer.encode(ANSWER_TRIGGER, add_special_tokens=False)
+            self.YES_SCORE_IDX = self.tokenizer.encode("Yes", add_special_tokens=False)[0]
+        elif self.data_mode == 'origin':
+            discriminative_reward_model = AutoModelForSequenceClassification.from_pretrained(opt.reward_model_path)
+            self.discriminative_reward_model, *_ = deepspeed.initialize(model=discriminative_reward_model, config=eval_ds_config)
+            self.discriminative_reward_model.eval()
+
         self.ref_model, *_ = deepspeed.initialize(model=ref_model, config=eval_ds_config)
         self.ref_model.eval()
 
@@ -376,6 +382,28 @@ class PPOTrainer():
         del batch_input_ids, batch_attention_mask
         torch.cuda.empty_cache()
         return rewards
+    
+    # TODO 之后要加入situation和emotion
+    @torch.no_grad()
+    def get_discriminative_reward(self, sampled_vec:List[int])->List[float]:
+        """
+        先对sampled_vec 右pad，再过AutoModelForSequenceClassification 
+        """
+        sampled_vec = torch.tensor(pad_sequences(sampled_vec, pad_value=self.tokenizer.pad_token_id), dtype=torch.long, device=self.accelerator.device)
+        attention_mask, position_ids = prepare_forward(sampled_vec,self.tokenizer.pad_token_id)
+        output = self.discriminative_reward_model(
+                input_ids=sampled_vec,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                return_dict=True,
+                use_cache=False,
+                output_attentions=False,
+                output_hidden_states=False,
+            )
+        logits: torch.tensor = output.logits
+        print(logits)
+        print(logits.shape)
+        # rewards = logits.seqeunce
 
     def get_context_and_response(self, context: List[List[int]], responses: List[List[int]]):
         # responses 官方generate输出包含问题和答案
@@ -452,15 +480,17 @@ class PPOTrainer():
             assert len(context_vec) == len(responses_vec)
             
             context_vec_sampled, resp_vec_sampled, sampled_vec, sampled_text = self.get_context_and_response(context_vec, responses_vec)
-            sampled_vec = torch.tensor(pad_sequences(sampled_vec, pad_value=self.tokenizer.pad_token_id, padding='left'), 
-                                       dtype=torch.long, device=self.accelerator.device)
-            
-            bsz = sampled_vec.size(0)
             
             if self.data_mode=="rm":
                 rewards = self.get_rule_reward(batch['response'], sampled_text, batch["label"])
             elif self.data_mode=="conv":
                 rewards = self.get_generative_reward(sampled_text, batch['text'], batch['situation'], batch['emotion'])
+            elif self.data_mode == "origin":
+                rewards = self.get_discriminative_reward(sampled_vec) # 此时sample_vec没有pad
+
+            sampled_vec = torch.tensor(pad_sequences(sampled_vec, pad_value=self.tokenizer.pad_token_id, padding='left'), 
+                                       dtype=torch.long, device=self.accelerator.device)
+            bsz = sampled_vec.size(0)
             self.train_metrics.record_metric_many('rewards', rewards)
             rewards = torch.tensor(rewards, device=torch.device("cpu"), dtype=torch.float32)
             if self.use_reward_scaling:
@@ -735,13 +765,17 @@ class PPOTrainer():
             )
             # _, responses = self.policy_model.generate(batch, **kwargs)
             _, _, output_vec, output_text= self.get_context_and_response(batch['text_vec'].tolist(), responses.tolist())
-
-            output_vec = torch.tensor(pad_sequences(output_vec, pad_value=self.tokenizer.pad_token_id, padding='left'), 
-                                                     dtype=torch.long, device=self.accelerator.device)
+            
             if self.data_mode == "rm":
                 rewards = self.get_rule_reward(batch['response'], output_text, batch["label"])
             elif self.data_mode == "conv":
                 rewards= self.get_generative_reward(output_text, batch['text'],batch['situation'],batch['emotion'])
+            elif self.data_mode == "origin":
+                rewards = self.get_discriminative_reward(output_vec)
+
+            output_vec = torch.tensor(pad_sequences(output_vec, pad_value=self.tokenizer.pad_token_id, padding='left'), 
+                                                     dtype=torch.long, device=self.accelerator.device)
+            
             assert len(rewards) == output_vec.size(0), f"{len(rewards)}, {output_vec.size()}"
             self.valid_metrics.record_metric_many('rewards', rewards)
             

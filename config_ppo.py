@@ -71,7 +71,7 @@ def parse_args():
     parser.add_argument('--reward_temperature', type=float, default=0.8, help='reward model temperature')
     parser.add_argument('--reward_top_k', type=int, default=20, help='reward model top_k')
     parser.add_argument('--reward_num_return_sequences', type=int, default=4, help='reward model num return sequences')
-    parser.add_argument('--min_reward_num_return_sequences', type=int, default=4, help='min reward model num return sequences')
+    parser.add_argument('--min_reward_num_return_sequences', type=int, default=1, help='min reward model num return sequences')
     
     # Option for language
     parser.add_argument('--lang', type=str, choices=['zh', 'en'], help='special prompt choice for PPO-max-zh or PPO-max-en')

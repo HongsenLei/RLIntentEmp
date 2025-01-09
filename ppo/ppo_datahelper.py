@@ -7,7 +7,7 @@ import copy
 from typing import List, Dict, Any, Tuple
 from transformers import AutoTokenizer
 from torch.utils.data import get_worker_info, IterableDataset
-from src.utils import print_rank_0, pad_sequences
+from src.utils import print_rank_0, pad_sequences, KMP_matcher
 from src.constant import COT_INSTRUCT, COT_TRIGGER, CONV_SFT_SYSTEM_PROMPT, CHAT_TOKENS
 
 def get_tokenizer(opt):
@@ -353,89 +353,87 @@ class ExperienceDataset(IterDataset):
 
 
 
-# class PPOSFTDataset(IterDataset):
-#     def __init__(self, opt, accelerator, **kwargs):
-#         self.opt = opt
-#         self.mode = 'train'
-#         self.accelerator = accelerator
+class PPOSFTDataset(IterDataset):
+    def __init__(self, opt, use_distributed, rank, word_size , **kwargs):
+        super().__init__()
+        self.opt = opt
+        self.mode = 'train'
             
-#         self.tokenizer = get_tokenizer(opt)
-#         self.batch_size = opt.ppo_pretrain_batch_size_ratio
+        self.tokenizer = get_tokenizer(opt)
+        self.response_token_ids = self.tokenizer(CHAT_TOKENS[opt.base_model]["response_token"], add_special_tokens=False)["input_ids"]
+        self.human_token_ids = self.tokenizer(CHAT_TOKENS[opt.base_model]["human_token"], add_special_tokens=False)["input_ids"]
+    
+        self.batch_size = opt.ppo_pretrain_batch_size_ratio
 
-#         self.data = []
-#         for file in os.listdir(opt.ppo_pretrain_data_path):
-#             if file.endswith(f'{self.mode}.json'):
-#                 file_path = os.path.join(opt.ppo_pretrain_data_path, file)
-#                 tmp_data = []
-#                 tmp_data = self.load_data(file_path)
-          
-#                 self.data.extend(tmp_data)
-#                 logging.info(f'Loaded {len(tmp_data)} samples from {file_path}.')
-#         logging.info(f'=============Loaded total {len(self.data)} samples from {opt.ppo_pretrain_data_path}.=============')
+        self.data = []
+        for file in os.listdir(opt.ppo_pretrain_data_path):
+            if file.endswith(f'{self.mode}.json'):
+                file_path = os.path.join(opt.ppo_pretrain_data_path, file)
+                tmp_data = []
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as read_file:
+                        for line in read_file:
+                            tmp_data.append(json.loads(line))
+                except Exception as e:
+                    logging.warn(f"Loading samples from {file_path} failed. {str(e)}...")
+                self.data.extend(tmp_data)
+                logging.info(f'Loaded {len(tmp_data)} samples from {file_path}.')
+        logging.info(f'=============Loaded total {len(self.data)} samples from {opt.ppo_pretrain_data_path}.=============')
 
-#         self.size = len(self.data)
+        self.size = len(self.data)
 
-#         if accelerator and self.accelerator.use_distributed:
-#             self.data = self.data[self.accelerator.process_index::self.accelerator.num_processes]
+        if use_distributed:
+            self.data = self.data[rank::word_size]
 
-
-#     def load_data(self, file_path: str):
-#         with open(file_path, 'r') as f:
-#             data: List[List[str]] = json.load(f)
-
-#         output: List[Tuple[List[str], str]] = []
-
-#         for turn in data:
-#             if not isinstance(turn, list) or len(turn) < 2 or not all(turn):
-#                 continue
-#             output.append(turn)
-
-#         del data
-#         return output
-
-#     def format(self, sample: Tuple[List[str], str]) -> Dict[str, Any]:
-#         # original text concat special prompt: human prompt and assistant prompt
-#         context = [get_special_prompt(i, self.opt) + u for i, u in enumerate(sample)]
-            
-#         context_vec = self.tokenizer.encode(
-#             self.tokenizer.eos_token.join(context) + self.tokenizer.eos_token,
-#             add_special_tokens=True
-#         )
+    def _prepare_conv_pretrain_loss_mask(self, example:List[int])->List[int]:
+        mask = [1]*len(example)
+        response_matches = KMP_matcher(example, self.response_token_ids)
+        human_matches = KMP_matcher(example, self.human_token_ids)
+        mask[:human_matches[0]]=[0] * human_matches[0]
+        if len(response_matches)==len(human_matches) and len(response_matches)>0:
+            for hu_idx, re_idx in zip(human_matches,response_matches):
+                if hu_idx<re_idx:
+                    mask[hu_idx:re_idx+len(self.response_token_ids)]=[0] * (re_idx + len(self.response_token_ids) - hu_idx)
+                else:
+                    return [0]*len(example)
+            return mask
+        else:
+            return [0]*len(example)
         
-#         text_vec = context_vec[:self.opt.maxlen_prompt]
-#         loss_mask = []
-#         cnt = 0
-#         for v in text_vec:
-#             loss_mask.append(cnt % 2)
-#             cnt += int(v == self.tokenizer.eos_token_id)
+    def format(self, sample: Dict[str, Any]) -> Dict[str, Any]:
 
-#         output = {
-#             'text_vec': text_vec,
-#             'loss_mask': loss_mask,
-#         }
+        conversation = sample["conversation"]
+        conversation.insert(0, {"role": "system", "content": CONV_SFT_SYSTEM_PROMPT})
+        input_item = self.tokenizer.apply_chat_template(conversation=conversation, tokenize=True, return_dict=True)
+        
+        loss_mask = self._prepare_conv_pretrain_loss_mask(input_item["input_ids"])
 
-#         return output
+        text_vec = input_item["input_ids"][:self.opt.maxlen_prompt]
+        loss_mask = loss_mask[:self.opt.maxlen_prompt]
 
-#     def batchify(self, batch_samples: List[Dict[str, Any]]) -> Dict[str, Any]:
-#         batch = dict()
-#         batch_text_vec = torch.tensor(pad_sequences(
-#             [sample['text_vec'] for sample in batch_samples], pad_value=self.tokenizer.pad_token_id, pad_left=False
-#             ), dtype=torch.long)
-#         loss_mask = torch.tensor(pad_sequences(
-#             [sample['loss_mask'] for sample in batch_samples], pad_value=0, pad_left=False
-#             ), dtype=torch.bool)
+        output = {
+            'text_vec': text_vec,
+            'loss_mask': loss_mask,
+        }
+
+        return output
+
+    def batchify(self, batch_samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+        batch = dict()
+        batch_text_vec = torch.tensor(pad_sequences([sample['text_vec'] for sample in batch_samples], pad_value=self.tokenizer.pad_token_id), dtype=torch.long)
+        loss_mask = torch.tensor(pad_sequences([sample['loss_mask'] for sample in batch_samples], pad_value=0), dtype=torch.bool)
    
-#         batch.update({
-#             'text_vec': batch_text_vec,
-#             'loss_mask': loss_mask
-#         })
+        batch.update({
+            'text_vec': batch_text_vec,
+            'loss_mask': loss_mask
+        })
         
-#         return batch
+        return batch
             
-#     def batch_generator(self):
-#         while True:
-#             for batch in super().batch_generator():
-#                 if len(batch) == self.batch_size:
-#                     yield batch
-#             if self.mode != 'train':
-#                 break
+    def batch_generator(self):
+        while True:
+            for batch in super().batch_generator():
+                if len(batch) == self.batch_size:
+                    yield batch
+            if self.mode != 'train':
+                break

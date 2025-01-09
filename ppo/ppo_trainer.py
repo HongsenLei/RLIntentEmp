@@ -132,7 +132,7 @@ class PPOTrainer():
         self.pretrain_loader = None
         if self.use_ppo_pretrain_loss:
             self.pretrain_loader = iter(DataLoader(
-                                    self.pretrain_dataset_class()(self.opt, self.accelerator), 
+                                    self.pretrain_dataset_class()(self.opt, self.accelerator.use_distributed,self.rank,self.word_size,), 
                                     batch_size=None, 
                                     num_workers=self.opt.num_workers, 
                                     prefetch_factor=self.opt.num_prefetch, 

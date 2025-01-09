@@ -367,7 +367,7 @@ class PPOSFTDataset(IterDataset):
 
         self.data = []
         for file in os.listdir(opt.ppo_pretrain_data_path):
-            if file.endswith(f'{self.mode}.json'):
+            if file.endswith(f'{self.mode}.jsonl'):
                 file_path = os.path.join(opt.ppo_pretrain_data_path, file)
                 tmp_data = []
                 try:

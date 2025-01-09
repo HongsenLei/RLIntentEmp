@@ -15,6 +15,7 @@ lr=5e-6
 
 data_mode=conv
 data_path=/root/autodl-tmp/data/conv_ppo
+ppo_pretrain_data_path=/root/autodl-tmp/data/conv_sft
 exp_root=/root/autodl-tmp/experients
 exp_name=debug_ppo_${data_mode}
 exp_dir=${exp_root}/${exp_name}
@@ -40,6 +41,7 @@ train_ppo.py \
     --critic_model_path ${critic_model} \
     --model_save_path ${exp_dir} \
     --data_path ${data_path} \
+    --ppo_pretrain_data_path ${ppo_pretrain_data_path} \
     --seed 42 \
     --maxlen_prompt 768 \
     --maxlen_res 256 \
@@ -52,7 +54,9 @@ train_ppo.py \
     --pg_clip 0.2 \
     --reward_clip 0. \
     --entropy_loss_weight 0. \
-    --ppo_pretrain_loss_weight 0. \
+    --use_ppo_pretrain_loss \
+    --ppo_pretrain_batch_size_ratio 1\
+    --ppo_pretrain_loss_weight 1.0 \
     --kl_penalty_weight 0.1 \
     --use_advantage_norm \
     --use_advantage_clip \

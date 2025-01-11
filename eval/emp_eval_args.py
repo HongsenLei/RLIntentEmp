@@ -20,6 +20,7 @@ class DataArguments:
     rm_cot_eval_data_path: str = field(default=None, metadata={
         "help": "Path to the evaluating data of gen reward model."})
     data_mode: str = field(default="conv")
+    conv_sample_mode: str = field(default="valid")
     eval_max_length:int = field(
         default=1024,
         metadata={

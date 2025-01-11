@@ -121,7 +121,7 @@ def main():
         enable_prefix_caching=True,
         seed=eval_args.seed)
     sampling_params = SamplingParams(temperature=0.0,max_tokens=eval_args.max_new_token)
-    output_file = os.path.join(eval_args.output_dir, f"{data_args.data_mode}_eval.jsonl")
+    output_file = os.path.join(eval_args.output_dir, f"{data_args.data_mode}_{data_args.conv_sample_mode}_eval.jsonl")
     if os.path.exists(output_file):
         os.remove(output_file)
         print(f"Old file '{output_file}' has been removed!")

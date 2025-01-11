@@ -3,6 +3,7 @@
 # 指定要查找的目录
 data_mode="conv"
 exp_dir="/root/autodl-tmp/experients/ppo_origin_lr_5e-6_vm"
+conv_sample_mode="test"
 
 # 检查指定目录是否存在
 if [ ! -d "$exp_dir" ]; then
@@ -14,6 +15,6 @@ fi
 for dir in "$exp_dir"/checkpoint-*/; do
     # 检查是否确实是文件夹
     if [ -d "$dir" ]; then
-        bash exps/sample.sh $data_mode $dir
+        bash exps/sample.sh $data_mode $dir $conv_sample_mode
     fi
 done

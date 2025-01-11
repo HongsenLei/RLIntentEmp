@@ -189,8 +189,8 @@ def main(args):
 
     for checkpoint_number, subdir_path in checkpoints:
         # 对每个ckpt求评测指标
-        eval_file = os.path.join(subdir_path, f'{args.data_mode}_eval.jsonl')
-        metric_score_file = os.path.join(subdir_path, f'{args.data_mode}_metric_score.jsonl')
+        eval_file = os.path.join(subdir_path, f'{args.data_mode}_{args.conv_sample_mode}_eval.jsonl')
+        metric_score_file = os.path.join(subdir_path, f'{args.data_mode}_{args.conv_sample_mode}_metric_score.jsonl')
         if os.path.exists(metric_score_file):
             os.remove(metric_score_file)
             print(f"Old file '{metric_score_file}' has been removed!")
@@ -270,7 +270,7 @@ def main(args):
                 for k,v in sam_da_metric.items():
                     ckpt_metric[k].append(v)
        
-        result_file = os.path.join(subdir_path, f"total_res_{args.data_mode}_eval")
+        result_file = os.path.join(subdir_path, f"total_res_{args.data_mode}_{args.conv_sample_mode}_eval")
         with open(result_file, 'w') as f:
             # 遍历 total_metirc 字典并写入文件
             for k, v in ckpt_metric.items():
@@ -283,7 +283,7 @@ def main(args):
     
     # 画图
     print(exp_metric)
-    paint_dir = os.path.join(args.exp_model_path, "metric_paint")
+    paint_dir = os.path.join(args.exp_model_path, f"metric_paint_{args.conv_sample_mode}")
     os.makedirs(paint_dir, exist_ok=True) 
     for title, metrics in metrics_groups.items():
         plt.figure(figsize=(10, 6))  # 创建新的图形
@@ -306,11 +306,12 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="compute all ckpt score and paint")
     parser.add_argument('--data_mode', type=str,required=True)
+    parser.add_argument('--conv_sample_mode', type=str, default='valid') # conv_sample_mode: valid/test
     parser.add_argument('--exp_model_path', type=str, required=True)
     parser.add_argument('--bert_path', type=str, default="/root/autodl-tmp/model/roberta-large")
     # 解析命令行参数
     args = parser.parse_args()
     main(args)
 
-# python emp_metric_score.py --data_mode "conv" --exp_model_path "/root/autodl-tmp/experients/ppo_origin_lr_5e-6_vm" 
+# python emp_metric_score.py --data_mode "conv" --conv_sample_mode "test" --exp_model_path "/root/autodl-tmp/experients/ppo_origin_lr_5e-6_vm" 
 # python emp_metric_score.py --data_mode "rm" --exp_model_path "/seu_share/home/wutianxing/220222120/experients/sft_rm_lr_5e-6_bz_128"

@@ -58,7 +58,7 @@ def _rm_eval_tokenize_fn(item:dict, eval_max_length:int, tokenizer:AutoTokenizer
     text += f"Analyze whether the AI assitant's last response is reasonable:\n{item['response']}\n"
     text += COT_TRIGGER
 
-    input_item = tokenizer(text, add_special_tokens=False)
+    input_item = tokenizer(text, add_special_tokens=True) # 只在最前面加<|begin_of_text|>, 不在最结尾加结束标志eos_token
 
     # Truncation
     input_ids = input_item["input_ids"][-eval_max_length:]

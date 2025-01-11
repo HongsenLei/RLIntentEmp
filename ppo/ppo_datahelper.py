@@ -23,7 +23,7 @@ def get_tokenizer(opt):
     return tokenizer
 
 
-def get_model_prompt(conversation_history:List[Dict], situation:str, emotion:str, response:str)->str:
+def get_model_prompt(conversation_history:List[Dict], situation:str, emotion:str, response:str, add_cot_trigger:bool=True, reasonCoT:str=None)->str:
     context = COT_INSTRUCT
 
     for turn in conversation_history:
@@ -35,7 +35,10 @@ def get_model_prompt(conversation_history:List[Dict], situation:str, emotion:str
     context += f"The initial emotion of user is related to '{emotion}', user's emotion may change as the conversation progresses.\n\n" # 有关于user情感的标签质量非常低，不使用
     
     context += f"Analyze whether the AI assitant's last response is reasonable:\n{response}\n"
-    context += COT_TRIGGER
+    if add_cot_trigger:
+        context += COT_TRIGGER
+    else:
+        context += reasonCoT # 包含了COT_TRIGGER和ANSWER_TRIGGER
     return context
 
 class IterDataset(IterableDataset):
@@ -362,7 +365,8 @@ class PPOSFTDataset(IterDataset):
         self.tokenizer = get_tokenizer(opt)
         self.response_token_ids = self.tokenizer(CHAT_TOKENS[opt.base_model]["response_token"], add_special_tokens=False)["input_ids"]
         self.human_token_ids = self.tokenizer(CHAT_TOKENS[opt.base_model]["human_token"], add_special_tokens=False)["input_ids"]
-    
+        self.cot_trigger_token_ids = self.tokenizer(COT_TRIGGER, add_special_tokens=False)["input_ids"]
+
         self.batch_size = opt.ppo_pretrain_batch_size_ratio
 
         self.data = []
@@ -385,6 +389,8 @@ class PPOSFTDataset(IterDataset):
         if use_distributed:
             self.data = self.data[rank::word_size]
 
+        random.shuffle(self.data)
+
     def _prepare_conv_pretrain_loss_mask(self, example:List[int])->List[int]:
         mask = [1]*len(example)
         response_matches = KMP_matcher(example, self.response_token_ids)
@@ -399,23 +405,56 @@ class PPOSFTDataset(IterDataset):
             return mask
         else:
             return [0]*len(example)
-        
+    
+    def _prepare_rm_pretrain_loss_mask(self, example:List[int])->List[int]:
+        mask = [1]*len(example)
+        cot_trigger_matches = KMP_matcher(example, self.cot_trigger_token_ids)
+        if len(cot_trigger_matches)==1:
+            mask[:cot_trigger_matches[0]+len(self.cot_trigger_token_ids)]=[0]*(cot_trigger_matches[0]+len(self.cot_trigger_token_ids))
+        else:
+            mask = [0]*len(example)
+        return mask
+
     def format(self, sample: Dict[str, Any]) -> Dict[str, Any]:
+        if self.opt.data_mode=="conv":
+            conversation = sample["conversation"]
+            conversation.insert(0, {"role": "system", "content": CONV_SFT_SYSTEM_PROMPT})
+            input_item = self.tokenizer.apply_chat_template(conversation=conversation, tokenize=True, return_dict=True)
+            
+            loss_mask = self._prepare_conv_pretrain_loss_mask(input_item["input_ids"])
 
-        conversation = sample["conversation"]
-        conversation.insert(0, {"role": "system", "content": CONV_SFT_SYSTEM_PROMPT})
-        input_item = self.tokenizer.apply_chat_template(conversation=conversation, tokenize=True, return_dict=True)
-        
-        loss_mask = self._prepare_conv_pretrain_loss_mask(input_item["input_ids"])
+            text_vec = input_item["input_ids"][:self.opt.maxlen_prompt]
+            loss_mask = loss_mask[:self.opt.maxlen_prompt]
 
-        text_vec = input_item["input_ids"][:self.opt.maxlen_prompt]
-        loss_mask = loss_mask[:self.opt.maxlen_prompt]
+            output = {
+                'text_vec': text_vec,
+                'loss_mask': loss_mask,
+            }
+        elif self.opt.data_mode=="rm":
+             # 训练RM_SFT一样的输入数据
+            conversation_history = sample["conversation"][:-1] # without reference response
+            response = sample["response"]
+            reasonCoT = sample['reasonCoT']
 
-        output = {
-            'text_vec': text_vec,
-            'loss_mask': loss_mask,
-        }
+            context_vec = self.tokenizer.encode(get_model_prompt(conversation_history, sample["situation"], sample["emotion"], response, add_cot_trigger=False, reasonCoT=reasonCoT), 
+                                                add_special_tokens=True) # 只在最前面加<|begin_of_text|>, 不在最结尾加结束标志eos_token
+            context_vec += [self.tokenizer.eos_token_id]
+            
 
+            # truncate to max_len
+            while len(context_vec) > self.opt.maxlen_prompt and len(conversation_history) > 1:
+                conversation_history = conversation_history[1:]
+                context_vec = self.tokenizer.encode(get_model_prompt(conversation_history, sample["situation"], sample["emotion"], response, add_cot_trigger=False, reasonCoT=reasonCoT), 
+                                                add_special_tokens=True) # 只在最前面加<|begin_of_text|>, 不在最结尾加结束标志eos_token
+                context_vec += [self.tokenizer.eos_token_id]
+
+            loss_mask = self._prepare_rm_pretrain_loss_mask(context_vec)
+
+            output = {
+                'text_vec': context_vec,
+                'loss_mask': loss_mask,
+            }
+            
         return output
 
     def batchify(self, batch_samples: List[Dict[str, Any]]) -> Dict[str, Any]:

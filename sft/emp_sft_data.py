@@ -79,7 +79,7 @@ def _rm_train_tokenize_fn(item:dict, model_max_length:int, cot_trigger_token_ids
     text += f"Analyze whether the AI assitant's last response is reasonable:\n{item['response']}\n"
     text += item['reasonCoT'] # 包含了COT_TRIGGER和ANSWER_TRIGGER
 
-    input_ids = tokenizer(text, add_special_tokens=False)["input_ids"]
+    input_ids = tokenizer(text, add_special_tokens=True)["input_ids"] # 只在最前面加<|begin_of_text|>, 不在最结尾加结束标志eos_token
     input_ids += [tokenizer.eos_token_id]
     labels = _prepare_rm_sft_labels(input_ids, cot_trigger_token_ids)
     attention_mask = [1]*len(input_ids)

@@ -2,8 +2,8 @@
 
 export TOKENIZERS_PARALLELISM=fasle 
 
-exp_root=/seu_share/home/wutianxing/220222120/experients
-model=${exp_root}/sft_rm_lr_5e-6_bz_128/checkpoint-900
+model_root=/root/autodl-tmp/model
+model=${model_root}/rm_sft_900
 base_model=Llama-3.2-1B-Instruct
 
 lr=5e-7
@@ -13,7 +13,8 @@ save_per_step=240
 warmup_steps=320 
 
 data_mode=rm
-data_path=/seu_share/home/wutianxing/220222120/data/rm_sft
+data_path=/root/autodl-tmp/data/rm_sft
+exp_root=/root/autodl-tmp/experients
 exp_name=ppo_${data_mode}_lr_${lr}_pretrainloss
 exp_dir=${exp_root}/${exp_name}
 

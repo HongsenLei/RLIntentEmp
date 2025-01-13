@@ -47,10 +47,11 @@ import os
 
 class LlamaValueModel(LlamaForSequenceClassification):
     def __init__(self, config, opt, tokenizer):
-        super().__init__(config)
         self.opt = opt
+        if self.opt.data_mode == 'rm':
+            config.num_labels = 1
+        super().__init__(config)
         self.tokenizer = tokenizer
-        # self.score = nn.Linear(config.hidden_size, 1, bias=False)
         
     def forward(self, decoder_input, only_last=True):
         attention_mask, position_ids = prepare_forward(decoder_input,self.tokenizer.pad_token_id)

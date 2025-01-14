@@ -39,7 +39,7 @@ gradient_clipping="1.0"
 zero3_init_flag="false" 
 
 # 设置实验名称和输出目录
-exp_name="intent_cls_lr_${learning_rate}_bz_$((per_device_train_batch_size * gradient_accumulation_steps * num_processes))"
+exp_name="intent_cls_lr_${learning_rate}_bz_$((per_device_train_batch_size * gradient_accumulation_steps * num_processes))_woinfo"
 seed="42"
 output_dir="${exp_root}/${exp_name}/"
 

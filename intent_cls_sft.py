@@ -41,6 +41,11 @@ class DataArguments:
         metadata={
             "help": "Maximum sequence length. Sequences will be right padded (and possibly truncated)."},
     )
+    with_more_info: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use 'situation' and 'emotion' to help the model make a decision."},
+    )
     num_workers: int = field(default=6)
 
 @dataclass
@@ -63,14 +68,15 @@ class TrainDataCollator:
             'labels': labels,
         }
 
-def get_input_id(conversation,situation,emotion,content,tokenizer:AutoTokenizer)->str:
+def get_input_id(conversation,situation,emotion,content,with_more_info,tokenizer:AutoTokenizer)->str:
     text = "Given a conversation between a user and an AI assistant, categorize the intention of the specified AI assistant reply."
     for turn in conversation:
         text += f"{turn['role']}: {turn['content']}\n"
-
-    text += "Here are the situations and emotions the user wants to express, without the AI assistant knowing in advance.\n"
-    text += f"What user wants to say is that '{situation}'.\n"
-    text += f"The initial emotion of user is related to '{emotion}', user's emotion may change as the conversation progresses.\n\n" # 有关于user情感的标签质量非常低，不使用
+    
+    if with_more_info:
+        text += "Here are the situations and emotions the user wants to express, without the AI assistant knowing in advance.\n"
+        text += f"What user wants to say is that '{situation}'.\n"
+        text += f"The initial emotion of user is related to '{emotion}', user's emotion may change as the conversation progresses.\n\n" # 有关于user情感的标签质量非常低，不使用
 
     text += f"""What was the intent of the sentence "{content}" in the AI assistant's last reply?"""
 
@@ -78,7 +84,7 @@ def get_input_id(conversation,situation,emotion,content,tokenizer:AutoTokenizer)
 
     return input_id
 
-def _train_tokenize_fn(batch, model_max_length:int, tokenizer:AutoTokenizer):
+def _train_tokenize_fn(batch, model_max_length:int, with_more_info: bool, tokenizer:AutoTokenizer):
     assert tokenizer.eos_token_id is not None, (tokenizer.eos_token_id, tokenizer.eos_token)
     new_batch = defaultdict(list)
     all_keys = list(batch.keys())
@@ -86,10 +92,10 @@ def _train_tokenize_fn(batch, model_max_length:int, tokenizer:AutoTokenizer):
     for item_values in zip(*(batch[k] for k in all_keys)):
         item = {k: item_values[i] for i, k in enumerate(all_keys)}
         conversation = item['conversation'] 
-        input_id = get_input_id(conversation,item['situation'],item['emotion'],item['content'],tokenizer)
+        input_id = get_input_id(conversation,item['situation'],item['emotion'],item['content'],with_more_info,tokenizer)
         while len(input_id)>model_max_length and len(conversation)>1:
             conversation = conversation[1:]
-            input_id = get_input_id(conversation,item['situation'],item['emotion'],item['content'],tokenizer)
+            input_id = get_input_id(conversation,item['situation'],item['emotion'],item['content'],with_more_info,tokenizer)
         
         attention_mask = [1]*len(input_id)
         label = LABLE2ID[f"<|{item['intent']}|>"]
@@ -106,7 +112,7 @@ def get_dataset(data_args:DataArguments, training_args:TrainingArguments, model_
     valid_dataset = Dataset.from_json(data_args.valid_data_path)
     tokenized_train_dataset = train_dataset.map(
             _train_tokenize_fn, 
-            fn_kwargs={'model_max_length': data_args.model_max_length,'tokenizer': tokenizer}, 
+            fn_kwargs={'model_max_length': data_args.model_max_length,'with_more_info': data_args.with_more_info, 'tokenizer': tokenizer}, 
             batched=True, 
             remove_columns=train_dataset.column_names, 
             num_proc=data_args.num_workers, 
@@ -114,7 +120,7 @@ def get_dataset(data_args:DataArguments, training_args:TrainingArguments, model_
         )
     tokenized_valid_dataset = valid_dataset.map(
             _train_tokenize_fn, 
-            fn_kwargs={'model_max_length': data_args.model_max_length,'tokenizer': tokenizer}, 
+            fn_kwargs={'model_max_length': data_args.model_max_length,'with_more_info': data_args.with_more_info, 'tokenizer': tokenizer},
             batched=True, 
             remove_columns=valid_dataset.column_names, 
             num_proc=data_args.num_workers, 
